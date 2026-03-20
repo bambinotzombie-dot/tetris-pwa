@@ -884,17 +884,23 @@
     bindTap(btnRotate, () => rotate(1));
   
     // ポーズ／再開のロジックを関数に切り出す
-    // bindTap と キーボード Pキー の両方から呼べるようにする
+    // bindTap・キーボード Pキー・visibilitychange の全てから安全に呼べる形に整理
     function doPause() {
       if (isGameOver) return;
       isPaused = !isPaused;
+
       if (isPaused) {
+        // ── ポーズ ──
         showOverlay('PAUSED');
-        bgmPause();  // Promise 経由で確実に停止
+        pauseBGM(); // Promise チェーン経由で確実に停止（DOMException を防ぐ）
       } else {
+        // ── 再開 ──
         hideOverlay();
-        bgmResume(); // 停止位置から再開
+        // isPaused を false にした後で直接 playBGM を呼ぶ
+        // （bgmResume 内部のガードに依存せず素直に実行）
+        if (bgmStarted) playBGM();
       }
+
       btnPause.textContent = isPaused ? '再開' : '一時停止';
     }
 
@@ -903,6 +909,24 @@
     bindTap(btnRestart, () => {
       btnPause.textContent = '一時停止';
       resetGame();
+    });
+
+    // ======= Page Visibility API: バックグラウンド / 画面オフ時のBGM制御 =======
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        // ── 画面が隠れた（バックグラウンド移行・電源ボタン等）──
+        // BGMを確実に停止（Promise チェーン経由で DOMException を防ぐ）
+        pauseBGM();
+
+        // ゲームオーバーでなく、まだポーズ中でなければ強制ポーズ
+        if (!isGameOver && !isPaused) {
+          isPaused = true;
+          showOverlay('PAUSED');
+          btnPause.textContent = '再開';
+        }
+      }
+      // ── 画面が戻ってきた時は何もしない ──
+      // ポーズ画面のまま待機し、ユーザーが手動で「再開」を押すまでBGMは再生しない
     });
 
     // ======= 入力（キーボード） =======
