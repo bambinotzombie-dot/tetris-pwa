@@ -382,20 +382,27 @@
     let bgmStarted = false;
 
     function tryStartBgm() {
-      if (bgmStarted) return;
+      // { once:true } に頼らず、自分で必ず両リスナーを削除（2回目以降は絶対に発火させない）
+      document.removeEventListener('touchstart', tryStartBgm);
+      document.removeEventListener('mousedown',  tryStartBgm);
+
+      // ポーズ中 / 既に起動済みの場合は play() を呼ばない
+      if (bgmStarted || isPaused) return;
+
       bgmStarted = true;
       bgm.volume = 0.45;
       bgm.play().catch(() => { bgmStarted = false; }); // 失敗してもゲームは継続
     }
 
-    /** ポーズ: 再生中のときだけ止める（未再生時はエラーなし） */
+    /** ポーズ: 再生中のときだけ止める */
     function bgmPause() {
       if (!bgm.paused) bgm.pause();
     }
 
-    /** 再開: 一度でも再生開始済みで、かつ止まっているときだけ再生 */
+    /** 再開: bgmStarted かつ停止中 かつ ポーズ解除済みの時だけ再生 */
     function bgmResume() {
-      if (bgmStarted && bgm.paused) bgm.play().catch(() => {});
+      if (!bgmStarted || !bgm.paused || isPaused) return;
+      bgm.play().catch(() => {});
     }
 
     /** ゲームオーバー時: 止めて先頭に戻す */
@@ -404,16 +411,17 @@
       bgm.currentTime = 0;
     }
 
-    /** リスタート時: 一度でも再生済みなら先頭から再生 */
+    /** リスタート時: 起動済みでポーズ中でなければ先頭から再生 */
     function bgmRestart() {
-      if (!bgmStarted) return; // まだ初回タップ前なら何もしない
+      if (!bgmStarted || isPaused) return;
       bgm.currentTime = 0;
       bgm.play().catch(() => {});
     }
 
     // ブラウザの自動再生ブロック回避: 最初のユーザー操作をトリガーにする
-    document.addEventListener('touchstart', tryStartBgm, { once: true, passive: true });
-    document.addEventListener('mousedown',  tryStartBgm, { once: true });
+    // passive:true のまま登録し、tryStartBgm 内で確実に removeEventListener する
+    document.addEventListener('touchstart', tryStartBgm, { passive: true });
+    document.addEventListener('mousedown',  tryStartBgm);
 
     // ======= ゲーム状態 =======
     /** @type {(string|null)[][]} */
@@ -834,7 +842,10 @@
     bindTap(btnUp, () => hardDrop());
     bindTap(btnRotate, () => rotate(1));
   
-    btnPause.addEventListener('click', () => {
+    btnPause.addEventListener('click', (e) => {
+      // document の tryStartBgm へバブリングしないよう伝播をここで止める
+      e.stopPropagation();
+
       if (isGameOver) return;
       isPaused = !isPaused;
       if (isPaused) {
