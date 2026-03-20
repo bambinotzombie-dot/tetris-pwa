@@ -377,93 +377,48 @@
       return (table || [[0, 0]]).map(([dx, dy]) => [dx, -dy]);
     }
   
-    // ======= BGM =======
-    // IIFEトップで1度だけ生成（シングルトン化）— getElementById には依存しない
-    const bgm = new Audio('./bgm.wav');
-    bgm.loop   = true;
-    bgm.volume = 0.45;
+// ======= BGM =======
+const bgm = new Audio('./bgm.wav');
+bgm.loop   = true;
+bgm.volume = 0.45;
 
-    let bgmStarted  = false;
-    let playPromise; // play() の Promise を保持（pause DOMException 対策）
+let bgmStarted  = false;
 
-    /**
-     * play() を Promise を追跡しながら実行する。
-     * モバイルでは play() が非同期で完了するため、戻り値を必ず保持する。
-     */
-    function playBGM() {
-      playPromise = bgm.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(() => {
-          // 自動再生ポリシーや中断によるエラーは無視してゲームを継続
-        });
-      }
-    }
+function playBGM() {
+  const p = bgm.play();
+  if (p !== undefined) {
+    p.catch(() => {
+      // 強制ポーズによるエラー（DOMException）はここで安全に握りつぶします
+    });
+  }
+}
 
-    /**
-     * pause() を play() の Promise が解決してから呼ぶ。
-     * play() 未完了のまま pause() すると DOMException が発生するため、
-     * .then() チェーンで順番を保証する。
-     */
-    function pauseBGM() {
-      if (playPromise !== undefined) {
-        playPromise.then(() => {
-          bgm.pause();
-        }).catch(() => {
-          // play() が失敗していた場合は何もしない
-        });
-      } else {
-        bgm.pause();
-      }
-    }
+function pauseBGM() {
+  // 待たずに「即座に」止める！（スマホのフリーズ対策）
+  bgm.pause();
+}
 
-    /** 初回ユーザー操作で BGM を開始する（自動再生ブロック回避） */
-    function tryStartBgm() {
-      // removeEventListener で確実に解除（2回目以降は絶対に発火させない）
-      document.removeEventListener('touchstart', tryStartBgm);
-      document.removeEventListener('mousedown',  tryStartBgm);
-      // 起動済み / ポーズ中 の場合は play() を呼ばない
-      if (bgmStarted || isPaused) return;
-      bgmStarted = true;
-      playBGM();
-    }
+function tryStartBgm() {
+  document.removeEventListener('touchstart', tryStartBgm);
+  document.removeEventListener('mousedown',  tryStartBgm);
+  if (bgmStarted || isPaused) return;
+  bgmStarted = true;
+  playBGM();
+}
 
-    /** ポーズ: Promise を経由して確実に停止 */
-    function bgmPause() {
-      pauseBGM();
-    }
+function bgmStop() {
+  bgm.pause();
+  bgm.currentTime = 0;
+}
 
-    /** 再開: 起動済みでポーズ解除済みのときだけ再生 */
-    function bgmResume() {
-      if (!bgmStarted || isPaused) return;
-      playBGM();
-    }
+function bgmRestart() {
+  if (!bgmStarted || isPaused) return;
+  bgm.currentTime = 0;
+  playBGM();
+}
 
-    /** ゲームオーバー: 停止して先頭に巻き戻す */
-    function bgmStop() {
-      if (playPromise !== undefined) {
-        playPromise.then(() => {
-          bgm.pause();
-          bgm.currentTime = 0;
-        }).catch(() => {});
-        playPromise = undefined;
-      } else {
-        bgm.pause();
-        bgm.currentTime = 0;
-      }
-    }
-
-    /** リスタート: 起動済みでポーズ中でなければ先頭から再生 */
-    function bgmRestart() {
-      if (!bgmStarted || isPaused) return;
-      bgm.currentTime = 0;
-      playBGM();
-    }
-
-    // 最初のユーザー操作をトリガーに BGM 再生を開始（自動再生ブロック回避）
-    // tryStartBgm 内で removeEventListener するため { once } は使わない
-    document.addEventListener('touchstart', tryStartBgm, { passive: true });
-    document.addEventListener('mousedown',  tryStartBgm);
-
+document.addEventListener('touchstart', tryStartBgm, { passive: true });
+document.addEventListener('mousedown',  tryStartBgm);
     // ======= ゲーム状態 =======
     /** @type {(string|null)[][]} */
     let board;
@@ -912,22 +867,22 @@
     });
 
     // ======= Page Visibility API: バックグラウンド / 画面オフ時のBGM制御 =======
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        // ── 画面が隠れた（バックグラウンド移行・電源ボタン等）──
-        // BGMを確実に停止（Promise チェーン経由で DOMException を防ぐ）
-        pauseBGM();
-
-        // ゲームオーバーでなく、まだポーズ中でなければ強制ポーズ
-        if (!isGameOver && !isPaused) {
-          isPaused = true;
-          showOverlay('PAUSED');
-          btnPause.textContent = '再開';
-        }
+    function handleBackground() {
+      pauseBGM(); // 強制停止
+      
+      if (!isGameOver && !isPaused) {
+        isPaused = true;
+        showOverlay('PAUSED');
+        btnPause.textContent = '再開';
       }
-      // ── 画面が戻ってきた時は何もしない ──
-      // ポーズ画面のまま待機し、ユーザーが手動で「再開」を押すまでBGMは再生しない
+    }
+
+    // 画面が隠れた時
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) handleBackground();
     });
+    // Safariなどの別アプリ切り替え時の保険
+    document.addEventListener('pagehide', handleBackground);
 
     // ======= 入力（キーボード） =======
     window.addEventListener('keydown', (e) => {
