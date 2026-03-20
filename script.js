@@ -380,12 +380,37 @@
     // ======= BGM =======
     const bgm = document.getElementById('bgm');
     let bgmStarted = false;
+
     function tryStartBgm() {
       if (bgmStarted) return;
       bgmStarted = true;
       bgm.volume = 0.45;
       bgm.play().catch(() => { bgmStarted = false; }); // 失敗してもゲームは継続
     }
+
+    /** ポーズ: 再生中のときだけ止める（未再生時はエラーなし） */
+    function bgmPause() {
+      if (!bgm.paused) bgm.pause();
+    }
+
+    /** 再開: 一度でも再生開始済みで、かつ止まっているときだけ再生 */
+    function bgmResume() {
+      if (bgmStarted && bgm.paused) bgm.play().catch(() => {});
+    }
+
+    /** ゲームオーバー時: 止めて先頭に戻す */
+    function bgmStop() {
+      bgm.pause();
+      bgm.currentTime = 0;
+    }
+
+    /** リスタート時: 一度でも再生済みなら先頭から再生 */
+    function bgmRestart() {
+      if (!bgmStarted) return; // まだ初回タップ前なら何もしない
+      bgm.currentTime = 0;
+      bgm.play().catch(() => {});
+    }
+
     // ブラウザの自動再生ブロック回避: 最初のユーザー操作をトリガーにする
     document.addEventListener('touchstart', tryStartBgm, { once: true, passive: true });
     document.addEventListener('mousedown',  tryStartBgm, { once: true });
@@ -447,6 +472,7 @@
   
       if (collides(p)) {
         isGameOver = true;
+        bgmStop();           // ゲームオーバー: BGM を停止して先頭に戻す
         showOverlay('GAME OVER');
         return null;
       }
@@ -518,6 +544,7 @@
       for (let y = 0; y < HIDDEN_ROWS; y++) {
         if (board[y].some(Boolean)) {
           isGameOver = true;
+          bgmStop();         // ゲームオーバー: BGM を停止して先頭に戻す
           showOverlay('GAME OVER');
           return;
         }
@@ -543,6 +570,7 @@
       for (let y = 0; y < HIDDEN_ROWS; y++) {
         if (board[y].some(Boolean)) {
           isGameOver = true;
+          bgmStop();         // ゲームオーバー: BGM を停止して先頭に戻す
           showOverlay('GAME OVER');
           return;
         }
@@ -730,6 +758,7 @@
       dropCounter = 0;
       updateHUD();
       hideOverlay();
+      bgmRestart(); // リスタート時: 先頭から再生（未再生なら何もしない）
       current = spawn();
     }
   
@@ -808,8 +837,13 @@
     btnPause.addEventListener('click', () => {
       if (isGameOver) return;
       isPaused = !isPaused;
-      if (isPaused) showOverlay('PAUSED');
-      else hideOverlay();
+      if (isPaused) {
+        showOverlay('PAUSED');
+        bgmPause();  // BGM を一時停止
+      } else {
+        hideOverlay();
+        bgmResume(); // BGM を停止位置から再開
+      }
       btnPause.textContent = isPaused ? '再開' : '一時停止';
     });
   
