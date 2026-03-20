@@ -377,48 +377,93 @@
       return (table || [[0, 0]]).map(([dx, dy]) => [dx, -dy]);
     }
   
-// ======= BGM =======
-const bgm = new Audio('./bgm.wav');
-bgm.loop   = true;
-bgm.volume = 0.45;
+    // ======= BGM (Web Audio API) =======
+    // HTML5 Audio の代わりに Web Audio API を使用。
+    // audioCtx.suspend() / resume() はハードウェアレベルで即座に動作するため
+    // スマホのバックグラウンド移行時でも確実に音が止まる。
 
-let bgmStarted  = false;
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let bgmBuffer  = null;  // fetch→decodeAudioData で得た AudioBuffer
+    let bgmSource  = null;  // 再生中の BufferSourceNode（使い捨て）
+    let bgmStarted = false; // 初回再生が行われたか
 
-function playBGM() {
-  const p = bgm.play();
-  if (p !== undefined) {
-    p.catch(() => {
-      // 強制ポーズによるエラー（DOMException）はここで安全に握りつぶします
-    });
-  }
-}
+    // BGM ファイルを事前フェッチしてデコード（バックグラウンドで実行）
+    fetch('./bgm.wav')
+      .then(res  => res.arrayBuffer())
+      .then(buf  => audioCtx.decodeAudioData(buf))
+      .then(decoded => { bgmBuffer = decoded; })
+      .catch(() => { /* bgm.wav が存在しない場合でもゲームは続行 */ });
 
-function pauseBGM() {
-  // 待たずに「即座に」止める！（スマホのフリーズ対策）
-  bgm.pause();
-}
+    /**
+     * 新しい BufferSourceNode を生成して先頭から再生する。
+     * BufferSourceNode は start() を一度呼ぶと使い捨てになるため、
+     * 毎回 createBufferSource() でノードを再生成する。
+     */
+    function playBGM() {
+      if (!bgmBuffer) return;
+      // 既存ノードを安全に停止・切断
+      if (bgmSource) {
+        try { bgmSource.stop(); } catch (_) {}
+        bgmSource.disconnect();
+        bgmSource = null;
+      }
+      bgmSource        = audioCtx.createBufferSource();
+      bgmSource.buffer = bgmBuffer;
+      bgmSource.loop   = true;
+      bgmSource.connect(audioCtx.destination);
+      bgmSource.start(0);
+    }
 
-function tryStartBgm() {
-  document.removeEventListener('touchstart', tryStartBgm);
-  document.removeEventListener('mousedown',  tryStartBgm);
-  if (bgmStarted || isPaused) return;
-  bgmStarted = true;
-  playBGM();
-}
+    /**
+     * AudioContext を suspend してBGMをハードウェアレベルで即座に停止する。
+     * HTML5 Audio.pause() と違い、Promise の競合による DOMException が発生しない。
+     */
+    function pauseBGM() {
+      if (audioCtx.state === 'running') audioCtx.suspend();
+    }
 
-function bgmStop() {
-  bgm.pause();
-  bgm.currentTime = 0;
-}
+    /**
+     * AudioContext を resume してBGMを再開する。
+     * suspend した位置から継続再生されるため、ノードの再生成は不要。
+     */
+    function resumeBGM() {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
 
-function bgmRestart() {
-  if (!bgmStarted || isPaused) return;
-  bgm.currentTime = 0;
-  playBGM();
-}
+    /** ゲームオーバー: ソースを破棄してコンテキストも suspend */
+    function bgmStop() {
+      if (bgmSource) {
+        try { bgmSource.stop(); } catch (_) {}
+        bgmSource.disconnect();
+        bgmSource = null;
+      }
+      if (audioCtx.state === 'running') audioCtx.suspend();
+    }
 
-document.addEventListener('touchstart', tryStartBgm, { passive: true });
-document.addEventListener('mousedown',  tryStartBgm);
+    /** リスタート: 先頭から再生（起動済み・ポーズ解除済みのとき） */
+    function bgmRestart() {
+      if (!bgmStarted || isPaused) return;
+      // suspend 中の場合は resume してから新ノードを再生
+      audioCtx.resume().then(() => playBGM());
+    }
+
+    /**
+     * 初回ユーザー操作: AudioContext を unlock して BGM を開始する。
+     * ブラウザの自動再生ポリシーにより、AudioContext は最初のユーザー操作まで
+     * 'suspended' 状態になっているため、resume() でアンロックしてから start() する。
+     */
+    function tryStartBgm() {
+      // removeEventListener で確実に解除（2回目以降は絶対に発火させない）
+      document.removeEventListener('touchstart', tryStartBgm);
+      document.removeEventListener('mousedown',  tryStartBgm);
+      if (bgmStarted || isPaused) return;
+      bgmStarted = true;
+      audioCtx.resume().then(() => playBGM());
+    }
+
+    // 最初のユーザー操作をトリガーに AudioContext をアンロック
+    document.addEventListener('touchstart', tryStartBgm, { passive: true });
+    document.addEventListener('mousedown',  tryStartBgm);
     // ======= ゲーム状態 =======
     /** @type {(string|null)[][]} */
     let board;
@@ -851,9 +896,9 @@ document.addEventListener('mousedown',  tryStartBgm);
       } else {
         // ── 再開 ──
         hideOverlay();
-        // isPaused を false にした後で直接 playBGM を呼ぶ
-        // （bgmResume 内部のガードに依存せず素直に実行）
-        if (bgmStarted) playBGM();
+        // audioCtx.resume() で suspend した位置から継続再生
+        // （ノードの再生成は不要）
+        if (bgmStarted) resumeBGM();
       }
 
       btnPause.textContent = isPaused ? '再開' : '一時停止';
