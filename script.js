@@ -24,7 +24,8 @@
     const btnRight = document.getElementById('btnRight');
     const btnDown = document.getElementById('btnDown');
     const btnRotate = document.getElementById('btnRotate');
-    const btnPause = document.getElementById('btnPause');
+    const btnMute    = document.getElementById('btnMute');
+    const btnPause   = document.getElementById('btnPause');
     const btnRestart = document.getElementById('btnRestart');
   
     // ======= 盤面設定 =======
@@ -386,6 +387,7 @@
     let bgmBuffer  = null;  // fetch→decodeAudioData で得た AudioBuffer
     let bgmSource  = null;  // 再生中の BufferSourceNode（使い捨て）
     let bgmStarted = false; // 初回再生が行われたか
+    let isMuted    = false; // ミュート状態（true のときは絶対に音を出さない）
 
     // BGM ファイルを事前フェッチしてデコード（バックグラウンドで実行）
     fetch('./bgm.wav')
@@ -400,7 +402,7 @@
      * 毎回 createBufferSource() でノードを再生成する。
      */
     function playBGM() {
-      if (!bgmBuffer) return;
+      if (!bgmBuffer || isMuted) return; // ミュート中は再生しない
       // 既存ノードを安全に停止・切断
       if (bgmSource) {
         try { bgmSource.stop(); } catch (_) {}
@@ -427,6 +429,7 @@
      * suspend した位置から継続再生されるため、ノードの再生成は不要。
      */
     function resumeBGM() {
+      if (isMuted) return; // ミュート中は再開しない
       if (audioCtx.state === 'suspended') audioCtx.resume();
     }
 
@@ -440,9 +443,9 @@
       if (audioCtx.state === 'running') audioCtx.suspend();
     }
 
-    /** リスタート: 先頭から再生（起動済み・ポーズ解除済みのとき） */
+    /** リスタート: 先頭から再生（起動済み・ポーズ解除済み・ミュートでないとき） */
     function bgmRestart() {
-      if (!bgmStarted || isPaused) return;
+      if (!bgmStarted || isPaused || isMuted) return;
       // suspend 中の場合は resume してから新ノードを再生
       audioCtx.resume().then(() => playBGM());
     }
@@ -456,7 +459,7 @@
       // removeEventListener で確実に解除（2回目以降は絶対に発火させない）
       document.removeEventListener('touchstart', tryStartBgm);
       document.removeEventListener('mousedown',  tryStartBgm);
-      if (bgmStarted || isPaused) return;
+      if (bgmStarted || isPaused || isMuted) return; // ミュート中は再生しない
       bgmStarted = true;
       audioCtx.resume().then(() => playBGM());
     }
@@ -896,15 +899,29 @@
       } else {
         // ── 再開 ──
         hideOverlay();
-        // audioCtx.resume() で suspend した位置から継続再生
-        // （ノードの再生成は不要）
-        if (bgmStarted) resumeBGM();
+        // ミュートでなければ audioCtx.resume() で継続再生
+        if (bgmStarted && !isMuted) resumeBGM();
       }
 
       btnPause.textContent = isPaused ? '再開' : '一時停止';
     }
 
+    // ミュート切り替え
+    function toggleMute() {
+      isMuted = !isMuted;
+      btnMute.textContent = isMuted ? '🔇 OFF' : '🔊 ON';
+
+      if (isMuted) {
+        // ミュート ON: 即座に停止（ゲーム状態には触らない）
+        pauseBGM();
+      } else {
+        // ミュート OFF: ゲームが動いていて初回再生済みなら再開
+        if (bgmStarted && !isPaused && !isGameOver) resumeBGM();
+      }
+    }
+
     // bindTap を使うことで touchstart で即反応・バブリング遮断・ズーム防止が一括適用される
+    bindTap(btnMute,    () => toggleMute());
     bindTap(btnPause,   () => doPause());
     bindTap(btnRestart, () => {
       btnPause.textContent = '一時停止';
