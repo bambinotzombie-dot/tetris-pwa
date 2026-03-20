@@ -1,0 +1,23 @@
+{
+  "name": "Tetris (Mobile Canvas)",
+  "short_name": "Tetris",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#070b16",
+  "theme_color": "#0b1020",
+  "description": "AndroidのChromeでホーム画面に追加してオフラインでも遊べるテトリス",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
+
