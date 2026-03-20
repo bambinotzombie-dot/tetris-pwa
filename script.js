@@ -378,48 +378,89 @@
     }
   
     // ======= BGM =======
-    const bgm = document.getElementById('bgm');
-    let bgmStarted = false;
+    // IIFEトップで1度だけ生成（シングルトン化）— getElementById には依存しない
+    const bgm = new Audio('./bgm.wav');
+    bgm.loop   = true;
+    bgm.volume = 0.45;
 
+    let bgmStarted  = false;
+    let playPromise; // play() の Promise を保持（pause DOMException 対策）
+
+    /**
+     * play() を Promise を追跡しながら実行する。
+     * モバイルでは play() が非同期で完了するため、戻り値を必ず保持する。
+     */
+    function playBGM() {
+      playPromise = bgm.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {
+          // 自動再生ポリシーや中断によるエラーは無視してゲームを継続
+        });
+      }
+    }
+
+    /**
+     * pause() を play() の Promise が解決してから呼ぶ。
+     * play() 未完了のまま pause() すると DOMException が発生するため、
+     * .then() チェーンで順番を保証する。
+     */
+    function pauseBGM() {
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          bgm.pause();
+        }).catch(() => {
+          // play() が失敗していた場合は何もしない
+        });
+      } else {
+        bgm.pause();
+      }
+    }
+
+    /** 初回ユーザー操作で BGM を開始する（自動再生ブロック回避） */
     function tryStartBgm() {
-      // { once:true } に頼らず、自分で必ず両リスナーを削除（2回目以降は絶対に発火させない）
+      // removeEventListener で確実に解除（2回目以降は絶対に発火させない）
       document.removeEventListener('touchstart', tryStartBgm);
       document.removeEventListener('mousedown',  tryStartBgm);
-
-      // ポーズ中 / 既に起動済みの場合は play() を呼ばない
+      // 起動済み / ポーズ中 の場合は play() を呼ばない
       if (bgmStarted || isPaused) return;
-
       bgmStarted = true;
-      bgm.volume = 0.45;
-      bgm.play().catch(() => { bgmStarted = false; }); // 失敗してもゲームは継続
+      playBGM();
     }
 
-    /** ポーズ: 再生中のときだけ止める */
+    /** ポーズ: Promise を経由して確実に停止 */
     function bgmPause() {
-      if (!bgm.paused) bgm.pause();
+      pauseBGM();
     }
 
-    /** 再開: bgmStarted かつ停止中 かつ ポーズ解除済みの時だけ再生 */
+    /** 再開: 起動済みでポーズ解除済みのときだけ再生 */
     function bgmResume() {
-      if (!bgmStarted || !bgm.paused || isPaused) return;
-      bgm.play().catch(() => {});
+      if (!bgmStarted || isPaused) return;
+      playBGM();
     }
 
-    /** ゲームオーバー時: 止めて先頭に戻す */
+    /** ゲームオーバー: 停止して先頭に巻き戻す */
     function bgmStop() {
-      bgm.pause();
-      bgm.currentTime = 0;
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          bgm.pause();
+          bgm.currentTime = 0;
+        }).catch(() => {});
+        playPromise = undefined;
+      } else {
+        bgm.pause();
+        bgm.currentTime = 0;
+      }
     }
 
-    /** リスタート時: 起動済みでポーズ中でなければ先頭から再生 */
+    /** リスタート: 起動済みでポーズ中でなければ先頭から再生 */
     function bgmRestart() {
       if (!bgmStarted || isPaused) return;
       bgm.currentTime = 0;
-      bgm.play().catch(() => {});
+      playBGM();
     }
 
-    // ブラウザの自動再生ブロック回避: 最初のユーザー操作をトリガーにする
-    // passive:true のまま登録し、tryStartBgm 内で確実に removeEventListener する
+    // 最初のユーザー操作をトリガーに BGM 再生を開始（自動再生ブロック回避）
+    // tryStartBgm 内で removeEventListener するため { once } は使わない
     document.addEventListener('touchstart', tryStartBgm, { passive: true });
     document.addEventListener('mousedown',  tryStartBgm);
 
@@ -780,8 +821,8 @@
   
     function bindTap(btn, fn) {
       const fire = (e) => {
-        // 画面スクロールや拡大を防止（要件: 必ず呼ぶ）
-        e?.preventDefault?.();
+        e?.preventDefault?.();   // スクロール / ダブルタップ拡大を防止
+        e?.stopPropagation?.();  // document の tryStartBgm へのバブリングを遮断
         fn();
       };
       btn.addEventListener('touchstart', (e) => { markTouch(); fire(e); }, { passive: false });
@@ -842,32 +883,33 @@
     bindTap(btnUp, () => hardDrop());
     bindTap(btnRotate, () => rotate(1));
   
-    btnPause.addEventListener('click', (e) => {
-      // document の tryStartBgm へバブリングしないよう伝播をここで止める
-      e.stopPropagation();
-
+    // ポーズ／再開のロジックを関数に切り出す
+    // bindTap と キーボード Pキー の両方から呼べるようにする
+    function doPause() {
       if (isGameOver) return;
       isPaused = !isPaused;
       if (isPaused) {
         showOverlay('PAUSED');
-        bgmPause();  // BGM を一時停止
+        bgmPause();  // Promise 経由で確実に停止
       } else {
         hideOverlay();
-        bgmResume(); // BGM を停止位置から再開
+        bgmResume(); // 停止位置から再開
       }
       btnPause.textContent = isPaused ? '再開' : '一時停止';
-    });
-  
-    btnRestart.addEventListener('click', () => {
+    }
+
+    // bindTap を使うことで touchstart で即反応・バブリング遮断・ズーム防止が一括適用される
+    bindTap(btnPause,   () => doPause());
+    bindTap(btnRestart, () => {
       btnPause.textContent = '一時停止';
       resetGame();
     });
-  
+
     // ======= 入力（キーボード） =======
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
       if (e.key === 'p' || e.key === 'P') {
-        btnPause.click();
+        doPause(); // btnPause.click() ではなく直接呼び出し（click イベントに依存しない）
         return;
       }
       if (isGameOver || isPaused) return;
